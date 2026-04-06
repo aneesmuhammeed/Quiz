@@ -332,19 +332,35 @@ function App() {
     const element = document.documentElement;
 
     try {
-      if (document.fullscreenElement) {
+      // Already fullscreen — nothing to do
+      if (
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement
+      ) {
         return;
       }
+
       if (element.requestFullscreen) {
         await element.requestFullscreen();
         return;
       }
+      // Safari macOS / older WebKit
       if (element.webkitRequestFullscreen) {
         element.webkitRequestFullscreen();
         return;
       }
-      setFullscreenError('Fullscreen is not supported in this browser.');
+      // Firefox (legacy)
+      if (element.mozRequestFullScreen) {
+        element.mozRequestFullScreen();
+        return;
+      }
+      // iOS Safari does NOT support the Fullscreen API at all;
+      // silently continue so the exam still works.
+      console.warn('Fullscreen API not available (likely iOS Safari). Continuing without fullscreen.');
     } catch (error) {
+      // Some browsers block the request (e.g. not triggered by user gesture).
+      // Don't hard-block the exam; just warn.
       setFullscreenError('Fullscreen request was blocked. Please allow it and try again.');
     }
   }, []);
@@ -567,10 +583,22 @@ function App() {
     }
 
     const handleFullscreenChange = () => {
-      const isFullscreen = !!document.fullscreenElement || !!document.webkitFullscreenElement;
+      const isFullscreen =
+        !!document.fullscreenElement ||
+        !!document.webkitFullscreenElement ||
+        !!document.mozFullScreenElement;
       if (isFullscreen) {
         hasEnteredFullscreenRef.current = true;
         setShowFullscreenModal(false);
+        return;
+      }
+      // iOS Safari may never fire fullscreenchange; skip modal if fullscreen is unsupported
+      const isFullscreenSupported =
+        document.fullscreenEnabled ||
+        document.webkitFullscreenEnabled ||
+        document.mozFullScreenEnabled;
+      if (!isFullscreenSupported) {
+        // Device doesn't support fullscreen (e.g. iPad Safari) — don't penalise
         return;
       }
       setShowFullscreenModal(true);
@@ -846,6 +874,30 @@ function App() {
             </p>
           )}
           {submitError && <p className="error">{submitError}</p>}
+
+          {/* ── Thank-you & email notice ── */}
+          <div
+            style={{
+              marginTop: '8px',
+              background: '#f7efe2',
+              borderRadius: '16px',
+              padding: '20px 22px',
+              borderLeft: '4px solid #f97316',
+            }}
+          >
+            <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: '1rem', color: '#92400e' }}>
+              📧 Check your email!
+            </p>
+            <p style={{ margin: '0 0 10px', color: '#5c3b1d', lineHeight: 1.6 }}>
+              A detailed result summary has been sent to{' '}
+              <strong>{mailId}</strong>. Please check your inbox (and spam folder)
+              for your score and certificate information.
+            </p>
+            <p style={{ margin: 0, color: '#7c5b3a', fontSize: '0.95rem' }}>
+              🙏 <strong>Thank you for attending the exam!</strong> We appreciate your
+              participation and wish you all the best.
+            </p>
+          </div>
         </div>
       </div>
     );
