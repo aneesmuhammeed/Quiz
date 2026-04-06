@@ -752,7 +752,7 @@ function App() {
                 type="text"
                 value={batch}
                 onChange={(event) => setBatch(event.target.value)}
-                placeholder="2024-2026"
+                placeholder="2024 - 26"
                 required
               />
             </label>
