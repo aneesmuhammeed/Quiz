@@ -189,7 +189,7 @@ const QUESTIONS = [
   },
   {
     id: 'q24',
-    prompt: 'National Voters\' Day ഏത് ദിവസം? (EC സ്ഥാപിതമായ ദിവസം - 1950)',
+    prompt: '\'National Voters\' Day ഏത് ദിവസം? (EC സ്ഥാപിതമായ ദിവസം - 1950)',
     options: ['ജനുവരി 25', 'ജനുവരി 26', 'ആഗസ്റ്റ് 15', 'ഒക്ടോബർ 2'],
     correctIndex: 0,
   },
@@ -213,13 +213,13 @@ const QUESTIONS = [
   {
     id: 'q27',
     prompt: 'Form 17C എന്താണ്?',
-    options: ['വോട്ടർ പട്ടിക', 'പോളിങ് സ്റ്റേഷനിലെ വോട്ടിന്റെ കണക്ക് (EVM + പോസ്റ്റൽ)', 'സ്ഥാനാർത്ഥി ചെലവ്', 'പരാതി ഫോം'],
+    options: ['വോട്ടർ പട്ടിക', 'പോളിങ് സ്റ്റേഷനിലെ വോട്ടിന്റെ കണക്ക് ', 'സ്ഥാനാർത്ഥി ചെലവ്', 'പരാതി ഫോം'],
     correctIndex: 1,
   },
   {
     id: 'q28',
     prompt: 'കേരളത്തിൽ ആദ്യമായി പൂർണമായും വെബ്കാസ്റ്റിങ് നടത്തിയ ജില്ല?',
-    options: ['തിരുവനന്തപുരം', 'എറണാകുളം', 'വയനാട് (2021)', 'കണ്ണൂർ'],
+    options: ['തിരുവനന്തപുരം', 'എറണാകുളം', 'വയനാട്', 'കണ്ണൂർ'],
     correctIndex: 2,
   },
   {
@@ -413,38 +413,25 @@ function App() {
         const appsScriptUrl = import.meta.env.VITE_APPS_SCRIPT_URL;
         if (appsScriptUrl && !error) {
           try {
-            // Build per-question response data for the email answer sheet
-            const responses = QUESTIONS.map((q) => {
-              const selectedIndex = answerPayload[q.id];
-              const isUnattempted = selectedIndex === null || selectedIndex === undefined;
-              return {
-                question:      q.prompt,
-                userAnswer:    isUnattempted ? null : q.options[selectedIndex],
-                correctAnswer: q.options[q.correctIndex],
-                isCorrect:     !isUnattempted && selectedIndex === q.correctIndex,
-                unattempted:   isUnattempted,
-              };
-            });
-
             await fetch(appsScriptUrl, {
               method: 'POST',
-              mode: 'no-cors',
               body: JSON.stringify({
-                fullName:       fullName.trim(),
-                email:          mailId.trim(),
-                course:         course.trim(),
-                batch:          batch.trim(),
-                collegeName:    collegeName.trim(),
+                fullName: fullName.trim(),
+                email: mailId.trim(),
+                course: course.trim(),
+                batch: batch.trim(),
+                collegeName: collegeName.trim(),
                 score,
                 totalCorrect,
                 totalIncorrect,
                 unattempted,
-                disqualified:   finalDisqualified,
-                responses,      // ← per-question breakdown for the email answer sheet
+                disqualified: finalDisqualified,
               }),
+              // Note: No JSON Content-Type header — Apps Script requires this
             });
           } catch (emailErr) {
             console.warn('Email sending failed:', emailErr);
+            // Don't block the user — just log the warning
           }
         }
         if (error) {
@@ -752,7 +739,7 @@ function App() {
                 type="text"
                 value={batch}
                 onChange={(event) => setBatch(event.target.value)}
-                placeholder="2024 - 26"
+                placeholder="2024-2026"
                 required
               />
             </label>
