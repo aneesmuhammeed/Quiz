@@ -13,9 +13,15 @@
 
 body {
   margin: 0;
+  /* Safari < 15 fallback for 100vh bug */
   min-height: 100vh;
+  min-height: -webkit-fill-available;
+  min-height: 100dvh;
   background: radial-gradient(circle at top, #fff4d6 0%, #f3e8d1 35%, #e6d7c3 100%);
   color: #1d1d1f;
+  /* Smooth scrolling on iOS */
+  -webkit-overflow-scrolling: touch;
+  overflow-x: hidden;
 }
 
 body.no-select,
@@ -25,14 +31,21 @@ body.no-select * {
 
 #root {
   min-height: 100vh;
+  min-height: -webkit-fill-available;
+  min-height: 100dvh;
 }
 
 .app-shell {
   min-height: 100vh;
+  min-height: -webkit-fill-available;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px 20px;
+  /* Account for iOS safe areas (notch / home-bar) */
+  padding: calc(32px + env(safe-area-inset-top)) 20px calc(32px + env(safe-area-inset-bottom));
+  padding-left: calc(20px + env(safe-area-inset-left));
+  padding-right: calc(20px + env(safe-area-inset-right));
 }
 
 .card {
@@ -121,6 +134,14 @@ body.no-select * {
   font-weight: 700;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+  /* Prevent text scaling on Safari */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  /* Minimum touch target */
+  min-height: 44px;
+  /* Remove tap highlight on mobile */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .btn:disabled {
@@ -300,6 +321,8 @@ body.no-select * {
   flex-wrap: wrap;
 }
 
+/* ── Responsive & Cross-browser ──────────────────────────────────────── */
+
 @media (max-width: 1024px) {
   .card {
     padding: 28px;
@@ -345,12 +368,20 @@ body.no-select * {
 
 @media (max-width: 600px) {
   .app-shell {
-    padding: 20px 14px;
+    /* Override, keeping safe-area insets from base rule */
+    padding-top: calc(20px + env(safe-area-inset-top));
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    padding-left: calc(14px + env(safe-area-inset-left));
+    padding-right: calc(14px + env(safe-area-inset-right));
+    align-items: flex-start;
   }
 
   .card {
     padding: 20px;
     border-radius: 18px;
+    /* Ensure card never overflows viewport width */
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   .exam-header {
@@ -362,14 +393,53 @@ body.no-select * {
   }
 
   .question-block h3 {
-    font-size: 1.1rem;
+    font-size: 1.05rem;
+    /* Allow long Malayalam words to break */
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   .option {
     padding: 12px;
   }
 
+  .option span {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .score-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .field input {
+    font-size: 16px; /* Prevents iOS auto-zoom on focus */
+  }
+}
+
+@media (max-width: 380px) {
   .score-grid {
     grid-template-columns: 1fr;
+  }
+
+  .nav-row .btn {
+    font-size: 0.9rem;
+    padding: 10px 16px;
+  }
+}
+
+/* High-DPI / Retina sharpness */
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 2dppx) {
+  .card {
+    box-shadow: 0 24px 50px rgba(37, 32, 22, 0.12);
+  }
+}
+
+/* Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .option,
+  .progress-bar {
+    transition: none;
   }
 }
