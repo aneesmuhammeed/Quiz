@@ -410,6 +410,43 @@ function App() {
         };
 
         const { error } = await supabase.from('submissions').insert(payload);
+        const appsScriptUrl = import.meta.env.VITE_APPS_SCRIPT_URL;
+        if (appsScriptUrl && !error) {
+          try {
+            // Build per-question response data for the email answer sheet
+            const responses = QUESTIONS.map((q) => {
+              const selectedIndex = answerPayload[q.id];
+              const isUnattempted = selectedIndex === null || selectedIndex === undefined;
+              return {
+                question:      q.prompt,
+                userAnswer:    isUnattempted ? null : q.options[selectedIndex],
+                correctAnswer: q.options[q.correctIndex],
+                isCorrect:     !isUnattempted && selectedIndex === q.correctIndex,
+                unattempted:   isUnattempted,
+              };
+            });
+
+            await fetch(appsScriptUrl, {
+              method: 'POST',
+              mode: 'no-cors',
+              body: JSON.stringify({
+                fullName:       fullName.trim(),
+                email:          mailId.trim(),
+                course:         course.trim(),
+                batch:          batch.trim(),
+                collegeName:    collegeName.trim(),
+                score,
+                totalCorrect,
+                totalIncorrect,
+                unattempted,
+                disqualified:   finalDisqualified,
+                responses,      // ← per-question breakdown for the email answer sheet
+              }),
+            });
+          } catch (emailErr) {
+            console.warn('Email sending failed:', emailErr);
+          }
+        }
         if (error) {
           setSubmitError('Submission failed. Please contact the proctor.');
         }
