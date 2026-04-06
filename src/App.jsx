@@ -268,6 +268,13 @@ const formatTime = (totalSeconds) => {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
+const formatElapsed = (totalSeconds) => {
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return s === 0 ? `${m} min` : `${m} min ${s}s`;
+};
+
 const calculateScore = (responses) => {
   let totalCorrect = 0;
   let totalIncorrect = 0;
@@ -302,6 +309,7 @@ function App() {
   const [examStarted, setExamStarted] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState(() => buildInitialAnswers());
+  const [markedForReview, setMarkedForReview] = useState(new Set());
   const [timeLeft, setTimeLeft] = useState(TOTAL_TIME_SECONDS);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -313,12 +321,16 @@ function App() {
   const [fullscreenError, setFullscreenError] = useState('');
   const [proctoringReady, setProctoringReady] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  // Violation toast — shown for 4 s after each infraction
+  const [violationToast, setViolationToast] = useState(null); // { message, count }
 
   const submittedRef = useRef(false);
   const lastViolationRef = useRef(0);
   const hasEnteredFullscreenRef = useRef(false);
   const lastProctorStatusRef = useRef({ visibility: 'visible', hasFocus: true });
   const reloadAfterSubmitRef = useRef(false);
+  const violationToastTimerRef = useRef(null);
+  const examStartTimeRef = useRef(null); // tracks when exam began for elapsed time
 
   const examActive = registered && examStarted && !hasSubmitted;
   const interactionDisabled =
@@ -378,6 +390,9 @@ function App() {
       const { score, totalCorrect, totalIncorrect, unattempted } = calculateScore(answerPayload);
       const finalDisqualified = disqualified || isDisqualified;
       const shouldReloadAfter = reloadAfterSubmitRef.current;
+      const elapsedSeconds = examStartTimeRef.current
+        ? Math.floor((Date.now() - examStartTimeRef.current) / 1000)
+        : 0;
 
       setResults({
         score,
@@ -387,6 +402,7 @@ function App() {
         disqualified: finalDisqualified,
         autoSubmitted: auto,
         reason,
+        elapsedSeconds,
       });
       setHasSubmitted(true);
 
@@ -472,13 +488,33 @@ function App() {
         return;
       }
       const now = Date.now();
-      if (now - lastViolationRef.current < 1000) {
+      // 2-second debounce — prevents a single tab-switch from counting twice
+      if (now - lastViolationRef.current < 2000) {
         return;
       }
       lastViolationRef.current = now;
 
+      const triggerLabels = {
+        visibility: 'Tab switch / hidden window detected',
+        blur:       'Window lost focus',
+        fullscreen: 'Exited fullscreen mode',
+        violations: 'Repeated policy violations',
+      };
+      const label = triggerLabels[trigger] ?? 'Policy violation detected';
+
       setViolations((prev) => {
         const next = prev + 1;
+        const remaining = 3 - next;
+
+        // Show toast warning
+        if (violationToastTimerRef.current) {
+          clearTimeout(violationToastTimerRef.current);
+        }
+        setViolationToast({ message: label, count: next, remaining });
+        violationToastTimerRef.current = window.setTimeout(() => {
+          setViolationToast(null);
+        }, 4000);
+
         if (next >= 3) {
           setIsDisqualified(true);
           reloadAfterSubmitRef.current = true;
@@ -501,10 +537,13 @@ function App() {
       const lostVisibility = prev.visibility === 'visible' && visibility !== 'visible';
       const lostFocus = prev.hasFocus && !hasFocus;
 
+      // Guard: if visibility was already lost, don't also count the blur
+      // that fires simultaneously from the same event (prevents double-counting).
       if (lostVisibility) {
         registerViolation('visibility');
-      }
-      if (lostFocus) {
+      } else if (lostFocus) {
+        // Only fire blur violation if visibility is still visible
+        // (i.e. the window is focused elsewhere but still on-screen)
         registerViolation('blur');
       }
 
@@ -676,6 +715,7 @@ function App() {
 
   const handleStartExam = async () => {
     setAnswers(buildInitialAnswers());
+    setMarkedForReview(new Set());
     setCurrentIndex(0);
     setTimeLeft(TOTAL_TIME_SECONDS);
     setSubmitError('');
@@ -687,12 +727,14 @@ function App() {
     hasEnteredFullscreenRef.current = false;
     submittedRef.current = false;
     reloadAfterSubmitRef.current = false;
+    examStartTimeRef.current = null;
 
     await enterFullscreen();
     lastProctorStatusRef.current = {
       visibility: document.visibilityState,
       hasFocus: document.hasFocus(),
     };
+    examStartTimeRef.current = Date.now();
     setExamStarted(true);
   };
 
@@ -704,6 +746,20 @@ function App() {
       ...prev,
       [questionId]: optionIndex,
     }));
+  };
+
+  const handleToggleMarkForReview = () => {
+    if (interactionDisabled) return;
+    const qid = currentQuestion.id;
+    setMarkedForReview((prev) => {
+      const next = new Set(prev);
+      if (next.has(qid)) {
+        next.delete(qid);
+      } else {
+        next.add(qid);
+      }
+      return next;
+    });
   };
 
   const handleOpenSubmitModal = () => {
@@ -730,49 +786,90 @@ function App() {
     setCurrentIndex((prev) => Math.max(prev - 1, 0));
   };
 
+  // ── Keyboard shortcuts (only active during exam) ──
+  useEffect(() => {
+    if (!examActive || interactionDisabled) return;
+
+    const handler = (e) => {
+      // Ignore key events when typing in an input/textarea
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+
+      switch (e.key) {
+        case 'a': case 'A': handleOptionSelect(currentQuestion.id, 0); break;
+        case 'b': case 'B': handleOptionSelect(currentQuestion.id, 1); break;
+        case 'c': case 'C': handleOptionSelect(currentQuestion.id, 2); break;
+        case 'd': case 'D': handleOptionSelect(currentQuestion.id, 3); break;
+        case 'ArrowRight': case 'ArrowDown':
+          e.preventDefault();
+          setCurrentIndex((prev) => Math.min(prev + 1, QUESTIONS.length - 1));
+          break;
+        case 'ArrowLeft': case 'ArrowUp':
+          e.preventDefault();
+          setCurrentIndex((prev) => Math.max(prev - 1, 0));
+          break;
+        case 'm': case 'M':
+          handleToggleMarkForReview();
+          break;
+        default: break;
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [examActive, interactionDisabled, currentQuestion, handleOptionSelect, handleToggleMarkForReview]);
+
   if (!registered) {
     return (
       <div className="app-shell">
         <div className="card">
           <div className="card-header">
+            <div className="logo-badge">🗳️</div>
             <span className="eyebrow">Registration</span>
-            <h1>MCQ Exam Check-In</h1>
-            <p>Enter your details to unlock the exam. Your answers are saved on submission.</p>
+            <h1>Exam Check‑In</h1>
+            <p>Enter your details below to unlock the assessment. All fields are required.</p>
           </div>
+
+          <hr className="divider" />
+
           <form className="form" onSubmit={handleRegistrationSubmit}>
             <label className="field">
-              <span>Full name (IN CAPITAL LETTERS)</span>
+              <span>Full Name (IN CAPITAL LETTERS)</span>
               <input
                 type="text"
                 value={fullName}
-                onChange={(event) => setFullName(event.target.value)}
-                placeholder="AMRITHA R "
+                onChange={(event) => setFullName(event.target.value.toUpperCase())}
+                placeholder="AMRITHA R"
                 autoComplete="name"
+                autoCapitalize="characters"
                 required
               />
             </label>
+
+            <div className="form-grid">
+              <label className="field">
+                <span>Course</span>
+                <input
+                  type="text"
+                  value={course}
+                  onChange={(event) => setCourse(event.target.value)}
+                  placeholder="D.El.Ed."
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Batch</span>
+                <input
+                  type="text"
+                  value={batch}
+                  onChange={(event) => setBatch(event.target.value)}
+                  placeholder="2024–2026"
+                  required
+                />
+              </label>
+            </div>
+
             <label className="field">
-              <span>Course</span>
-              <input
-                type="text"
-                value={course}
-                onChange={(event) => setCourse(event.target.value)}
-                placeholder="D.El.Ed."
-                required
-              />
-            </label>
-            <label className="field">
-              <span>Batch</span>
-              <input
-                type="text"
-                value={batch}
-                onChange={(event) => setBatch(event.target.value)}
-                placeholder="2024-2026"
-                required
-              />
-            </label>
-            <label className="field">
-              <span>College name</span>
+              <span>College Name</span>
               <input
                 type="text"
                 value={collegeName}
@@ -781,20 +878,25 @@ function App() {
                 required
               />
             </label>
+
             <label className="field">
-              <span>Mail id</span>
+              <span>Email Address</span>
               <input
                 type="email"
                 value={mailId}
                 onChange={(event) => setMailId(event.target.value)}
-                placeholder="amrithar@gmail.com"
+                placeholder="example@gmail.com"
                 autoComplete="email"
                 required
               />
             </label>
-            {registrationError && <p className="error">{registrationError}</p>}
-            <button type="submit" className="btn btn-primary">
-              Continue
+
+            {registrationError && (
+              <div className="error-msg">⚠ {registrationError}</div>
+            )}
+
+            <button type="submit" className="btn btn-primary btn-lg">
+              Continue to Exam →
             </button>
           </form>
         </div>
@@ -803,38 +905,61 @@ function App() {
   }
 
   if (registered && !examStarted) {
+    const firstName = fullName.trim().split(' ')[0];
     return (
       <div className="app-shell">
         <div className="card">
           <div className="card-header">
-            <span className="eyebrow">Ready</span>
-            <h1>Start the Exam</h1>
+            <div className="logo-badge">📋</div>
+            <span className="eyebrow">Ready to Begin</span>
+            <h1>Welcome, {firstName || 'Candidate'}!</h1>
             <p>
-              You will be moved into fullscreen mode. Leaving fullscreen or switching tabs is
-              recorded as a violation.
+              You will enter fullscreen mode. Leaving fullscreen or switching tabs counts
+              as a violation. Three violations will disqualify your attempt.
             </p>
           </div>
+
+          <hr className="divider" />
+
           <div className="start-grid">
             <div className="info-block">
-              <h3>Exam details</h3>
+              <span className="info-block-icon">📝</span>
+              <h3>Exam Details</h3>
               <ul>
-                <li>{QUESTIONS.length} questions</li>
-                <li>{Math.floor(TOTAL_TIME_SECONDS / 60)} minutes</li>
-                <li>+4 for correct, -1 for incorrect</li>
+                <li>{QUESTIONS.length} questions total</li>
+                <li>{Math.floor(TOTAL_TIME_SECONDS / 60)} minutes duration</li>
+                <li>+4 for correct answers</li>
+                <li>−1 for wrong answers</li>
+                <li>0 for unattempted</li>
               </ul>
             </div>
             <div className="info-block">
-              <h3>Proctoring rules</h3>
+              <span className="info-block-icon">⌨️</span>
+              <h3>Keyboard Shortcuts</h3>
+              <ul>
+                <li><strong>A / B / C / D</strong> — select option</li>
+                <li><strong>← / →</strong> — previous / next</li>
+                <li><strong>M</strong> — mark for review</li>
+              </ul>
+            </div>
+            <div className="info-block">
+              <span className="info-block-icon">🔒</span>
+              <h3>Proctoring Rules</h3>
               <ul>
                 <li>Stay in fullscreen at all times</li>
                 <li>No tab switching or window blur</li>
-                <li>3 violations disqualifies the attempt</li>
+                <li>No right-click or copy-paste</li>
+                <li>3 violations = disqualification</li>
               </ul>
             </div>
           </div>
-          {fullscreenError && <p className="error">{fullscreenError}</p>}
-          <button className="btn btn-primary" onClick={handleStartExam}>
-            Start Exam
+
+          {fullscreenError && (
+            <div className="error-msg">⚠ {fullscreenError}</div>
+          )}
+
+          <button className="btn btn-amber btn-lg" onClick={handleStartExam}>
+            🚀 Begin Exam
           </button>
         </div>
       </div>
@@ -842,62 +967,89 @@ function App() {
   }
 
   if (hasSubmitted && results) {
+    const percentage = Math.round((results.totalCorrect / QUESTIONS.length) * 100);
+    const heroEmoji = results.disqualified ? '🚫' : percentage >= 80 ? '🏆' : percentage >= 50 ? '🎯' : '📊';
+    const maxScore = QUESTIONS.length * 4;
     return (
       <div className="app-shell">
         <div className="card">
           <div className="card-header">
             <span className="eyebrow">Completed</span>
-            <h1>Test Completed</h1>
-            <p>Your submission has been recorded.</p>
+            <h1>Exam Submitted</h1>
+            <p>Your responses have been recorded successfully, <strong>{fullName.trim().split(' ')[0] || 'Candidate'}</strong>.</p>
           </div>
+
+          <div className="score-hero">
+            <div className="score-hero-icon">{heroEmoji}</div>
+            <div className="score-hero-value">{results.score}</div>
+            <div className="score-hero-label">Final Score out of {maxScore} • {percentage}% accuracy</div>
+            {results.elapsedSeconds > 0 && (
+              <div className="score-hero-time">⏱ Time taken: {formatElapsed(results.elapsedSeconds)}</div>
+            )}
+          </div>
+
           <div className="score-grid">
-            <div className="score-card">
-              <p className="score-label">Final score</p>
-              <p className="score-value">{results.score}</p>
-            </div>
-            <div className="score-card">
-              <p className="score-label">Correct</p>
+            <div className="score-card correct">
+              <p className="score-label">✓ Correct</p>
               <p className="score-value">{results.totalCorrect}</p>
             </div>
-            <div className="score-card">
-              <p className="score-label">Incorrect</p>
+            <div className="score-card incorrect">
+              <p className="score-label">✗ Incorrect</p>
               <p className="score-value">{results.totalIncorrect}</p>
             </div>
-            <div className="score-card">
-              <p className="score-label">Unattempted</p>
+            <div className="score-card missed">
+              <p className="score-label">— Missed</p>
               <p className="score-value">{results.unattempted}</p>
             </div>
           </div>
-          {results.disqualified && (
-            <p className="warning">
-              This attempt was marked as disqualified due to policy violations.
-            </p>
-          )}
-          {submitError && <p className="error">{submitError}</p>}
 
-          {/* ── Thank-you & email notice ── */}
-          <div
-            style={{
-              marginTop: '8px',
-              background: '#f7efe2',
-              borderRadius: '16px',
-              padding: '20px 22px',
-              borderLeft: '4px solid #f97316',
-            }}
-          >
-            <p style={{ margin: '0 0 8px', fontWeight: 700, fontSize: '1rem', color: '#92400e' }}>
-              📧 Check your email!
-            </p>
-            <p style={{ margin: '0 0 10px', color: '#5c3b1d', lineHeight: 1.6 }}>
-              A detailed result summary has been sent to{' '}
-              <strong>{mailId}</strong>. Please check your inbox (and spam folder)
-              for your score and certificate information.
-            </p>
-            <p style={{ margin: 0, color: '#7c5b3a', fontSize: '0.95rem' }}>
-              🙏 <strong>Thank you for attending the exam!</strong> We appreciate your
-              participation and wish you all the best.
-            </p>
+          {/* Marks legend */}
+          <div className="marks-legend">
+            <span className="ml-item ml-correct">+4 per correct</span>
+            <span className="ml-sep">·</span>
+            <span className="ml-item ml-incorrect">−1 per wrong</span>
+            <span className="ml-sep">·</span>
+            <span className="ml-item ml-missed">0 unattempted</span>
           </div>
+
+          {results.disqualified && (
+            <div className="disqualified-alert">
+              <span className="disqualified-icon">🚫</span>
+              <span>This attempt was marked as disqualified due to policy violations during the exam.</span>
+            </div>
+          )}
+
+          {submitError && <div className="error-msg">⚠ {submitError}</div>}
+
+          <div className="thankyou-box">
+            <div className="thankyou-box-title">📧 Check your email!</div>
+            <p>
+              A detailed result summary has been sent to{' '}
+              <strong>{mailId}</strong>. Please check your inbox and spam folder for
+              your score report and certificate information.
+            </p>
+            <p>🙏 <strong>Thank you for attending the exam!</strong> We appreciate your participation and wish you all the best.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const violationBadgeClass = violations === 0 ? 'badge badge-safe' : violations === 1 ? 'badge badge-warn' : 'badge badge-danger';
+  const timerClass = `timer${timeLeft <= 300 ? ' danger' : ''}`;
+  const LETTERS = ['A', 'B', 'C', 'D', 'E'];
+  const answeredCount = Object.values(answers).filter((v) => v !== null).length;
+  const markedCount = markedForReview.size;
+  const isCurrentMarked = markedForReview.has(currentQuestion.id);
+
+  // Submitting overlay
+  if (isSubmitting) {
+    return (
+      <div className="app-shell">
+        <div className="submitting-overlay">
+          <div className="submitting-spinner" />
+          <p className="submitting-text">Submitting your exam…</p>
+          <p className="submitting-sub">Please do not close this window.</p>
         </div>
       </div>
     );
@@ -906,33 +1058,68 @@ function App() {
   return (
     <div className="app-shell">
       <div className="card exam-card">
+        {/* ── Header ── */}
         <div className="exam-header">
-          <div>
-            <p className="eyebrow">Exam in progress</p>
-            <h2>
-              Question {currentIndex + 1} of {QUESTIONS.length}
-            </h2>
+          <div className="exam-header-left">
+            <span className="eyebrow">Exam in Progress</span>
+            <h2>Question {currentIndex + 1} <span style={{ opacity: 0.45, fontWeight: 500 }}>of {QUESTIONS.length}</span></h2>
           </div>
           <div className="timer-wrap">
-            <span className="timer">{formattedTime}</span>
-            <span className="badge">{violations} / 3 violations</span>
+            <span className={timerClass}>{formattedTime}</span>
+            {/* Violation indicator — shows dots + remaining warning */}
+            <div className="violation-indicator">
+              <div className="violation-dots">
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className={`v-dot${i < violations ? (violations >= 3 ? ' v-dot-red' : violations === 2 ? ' v-dot-orange' : ' v-dot-yellow') : ''}`}
+                    title={i < violations ? 'Violation recorded' : 'No violation'}
+                  />
+                ))}
+              </div>
+              <span className={violationBadgeClass}>
+                {violations === 0
+                  ? 'No violations'
+                  : violations === 1
+                  ? '1 warning — 2 left'
+                  : violations === 2
+                  ? '2 warnings — 1 left'
+                  : 'Disqualified'}
+              </span>
+            </div>
           </div>
         </div>
 
-        <div className="progress">
+        {/* ── Progress ── */}
+        <div className="progress" role="progressbar" aria-valuenow={currentIndex + 1} aria-valuemax={QUESTIONS.length}>
           <div
             className="progress-bar"
             style={{ width: `${((currentIndex + 1) / QUESTIONS.length) * 100}%` }}
           />
         </div>
 
+        {/* ── Question ── */}
         <div className="question-block">
-          <h3>{currentQuestion.prompt}</h3>
-          <div className="options">
+          <div className="question-meta">
+            <p className="question-prompt">{currentQuestion.prompt}</p>
+            <button
+              className={`mark-review-btn${isCurrentMarked ? ' marked' : ''}`}
+              onClick={handleToggleMarkForReview}
+              disabled={interactionDisabled}
+              title="Mark for review (M)"
+              aria-label={isCurrentMarked ? 'Unmark for review' : 'Mark for review'}
+            >
+              {isCurrentMarked ? '🚩 Marked' : '🏳 Mark'}
+            </button>
+          </div>
+          <div className="options" role="radiogroup">
             {currentQuestion.options.map((option, index) => {
               const isSelected = answers[currentQuestion.id] === index;
               return (
-                <label key={option} className={`option ${isSelected ? 'selected' : ''}`}>
+                <label
+                  key={option}
+                  className={`option${isSelected ? ' selected' : ''}${interactionDisabled ? ' disabled' : ''}`}
+                >
                   <input
                     type="radio"
                     name={currentQuestion.id}
@@ -940,64 +1127,164 @@ function App() {
                     onChange={() => handleOptionSelect(currentQuestion.id, index)}
                     disabled={interactionDisabled}
                   />
-                  <span>{option}</span>
+                  <span className="option-letter">{LETTERS[index] ?? index + 1}</span>
+                  <span className="option-text">{option}</span>
                 </label>
               );
             })}
           </div>
         </div>
 
+        {/* ── Stats bar ── */}
+        <div className="exam-stats-bar">
+          <span className="stat-pill stat-answered">
+            <span className="stat-dot" />  {answeredCount} Answered
+          </span>
+          <span className="stat-pill stat-marked">
+            <span className="stat-dot" /> {markedCount} Marked
+          </span>
+          <span className="stat-pill stat-remaining">
+            <span className="stat-dot" /> {QUESTIONS.length - answeredCount} Remaining
+          </span>
+          <span className="stat-hint">⌨ A–D · ←→ nav · M mark</span>
+        </div>
+
+        {/* ── Question Navigator ── */}
+        <div className="q-nav" role="navigation" aria-label="Question navigator">
+          {QUESTIONS.map((q, i) => {
+            const isAnswered = answers[q.id] !== null && answers[q.id] !== undefined;
+            const isMarked = markedForReview.has(q.id);
+            const isCurrent = i === currentIndex;
+            let cls = 'q-nav-dot';
+            if (isCurrent) cls += ' current';
+            else if (isMarked && isAnswered) cls += ' answered marked';
+            else if (isMarked) cls += ' marked';
+            else if (isAnswered) cls += ' answered';
+            return (
+              <button
+                key={q.id}
+                className={cls}
+                onClick={() => !interactionDisabled && setCurrentIndex(i)}
+                disabled={interactionDisabled}
+                aria-label={`Question ${i + 1}${isAnswered ? ' answered' : ''}${isMarked ? ' marked for review' : ''}`}
+                title={`Q${i + 1}${isAnswered ? ' ✓' : ''}${isMarked ? ' 🚩' : ''}`}
+              >
+                {i + 1}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* ── Navigation ── */}
         <div className="nav-row">
           <button
             className="btn btn-ghost"
             onClick={goPrevious}
             disabled={interactionDisabled || currentIndex === 0}
           >
-            Previous
+            ← Prev
           </button>
           <button
             className="btn btn-ghost"
             onClick={goNext}
             disabled={interactionDisabled || currentIndex === QUESTIONS.length - 1}
           >
-            Next
+            Next →
           </button>
           <button
             className="btn btn-primary"
             onClick={handleOpenSubmitModal}
             disabled={interactionDisabled}
           >
-            Submit
+            Submit Exam
           </button>
         </div>
 
-        {submitError && <p className="error">{submitError}</p>}
+        {submitError && <div className="error-msg">⚠ {submitError}</div>}
       </div>
 
+      {/* ── Violation Toast ── */}
+      {violationToast && (
+        <div
+          className={`violation-toast${violationToast.count >= 2 ? ' violation-toast-red' : ' violation-toast-yellow'}`}
+          role="alert"
+          aria-live="assertive"
+        >
+          <div className="violation-toast-icon">
+            {violationToast.count >= 2 ? '🚨' : '⚠️'}
+          </div>
+          <div className="violation-toast-body">
+            <strong>Violation #{violationToast.count} Recorded</strong>
+            <p>{violationToast.message}</p>
+            {violationToast.remaining > 0 ? (
+              <p className="violation-toast-warn">
+                {violationToast.remaining} more violation{violationToast.remaining !== 1 ? 's' : ''} will result in automatic disqualification.
+              </p>
+            ) : (
+              <p className="violation-toast-warn">You have been disqualified. Submitting your exam…</p>
+            )}
+          </div>
+          <button
+            className="violation-toast-close"
+            onClick={() => setViolationToast(null)}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ── Fullscreen Modal ── */}
       {showFullscreenModal && examActive && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="fs-title">
           <div className="modal">
-            <h3>Fullscreen required</h3>
-            <p>You must remain in fullscreen mode to continue the exam.</p>
-            {fullscreenError && <p className="error">{fullscreenError}</p>}
-            <button className="btn btn-primary" onClick={enterFullscreen}>
-              Return to Fullscreen
-            </button>
+            <span className="modal-icon">🖥️</span>
+            <h3 id="fs-title">Fullscreen Required</h3>
+            <p>You exited fullscreen mode. This has been recorded as a violation.</p>
+            {violations > 0 && (
+              <div className={`violation-modal-status${violations >= 2 ? ' vms-red' : ' vms-yellow'}`}>
+                <strong>Violation {violations} of 3</strong>
+                {' — '}
+                {3 - violations > 0
+                  ? `${3 - violations} more will disqualify your attempt.`
+                  : 'Next violation will disqualify you.'}
+              </div>
+            )}
+            {fullscreenError && <div className="error-msg" style={{ marginTop: '12px' }}>⚠ {fullscreenError}</div>}
+            <div className="modal-actions">
+              <button className="btn btn-primary" onClick={enterFullscreen}>
+                Return to Fullscreen
+              </button>
+            </div>
           </div>
         </div>
       )}
 
+      {/* ── Submit Confirm Modal ── */}
       {showSubmitModal && examActive && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true">
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="sub-title">
           <div className="modal">
-            <h3>Submit exam?</h3>
-            <p>Once submitted, you cannot change your answers.</p>
+            <span className="modal-icon">📤</span>
+            <h3 id="sub-title">Submit Exam?</h3>
+            <p>
+              You have answered{' '}
+              <strong style={{ color: 'var(--clr-text)' }}>
+                {answeredCount}
+              </strong>{' '}
+              of <strong style={{ color: 'var(--clr-text)' }}>{QUESTIONS.length}</strong> questions.
+              {answeredCount < QUESTIONS.length && (
+                <span style={{ color: 'var(--clr-warning)', fontWeight: 600 }}>
+                  {' '}{QUESTIONS.length - answeredCount} question{QUESTIONS.length - answeredCount !== 1 ? 's' : ''} left unattempted.
+                </span>
+              )}
+            </p>
+            <p style={{ marginTop: '6px' }}>Once submitted, answers cannot be changed.</p>
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={handleCancelSubmit}>
-                Cancel
+                Go Back
               </button>
               <button className="btn btn-primary" onClick={handleConfirmSubmit}>
-                Submit Exam
+                Submit Now
               </button>
             </div>
           </div>
