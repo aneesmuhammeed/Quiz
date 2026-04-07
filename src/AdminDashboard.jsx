@@ -15,12 +15,28 @@ const normalizeCollegeName = (name) => {
   if (!name) return 'Unknown';
   let clean = String(name).toLowerCase();
   
-  clean = clean.replace(/\(w\)/g, ' ');
-  clean = clean.replace(/\bgovt\.?\b/g, 'government');
+  // 1. Remove punctuation
   clean = clean.replace(/[^a-z0-9]/g, ' ');
+  
+  // 2. Remove "W" or Women markers safely
+  clean = clean.replace(/\(w\)/g, ' ');
+  clean = clean.replace(/\bw\b/g, ' ');
+  
+  // 3. Fix common Typos and Abbreviations
+  clean = clean.replace(/\b(?:gov|govt|governtment|govrt)\b/g, 'government');
+  clean = clean.replace(/\bt t i\b/g, 'tti');
+  clean = clean.replace(/\bpkd\b/g, 'palakkad');
+  
+  // 4. Clean up spaces
   clean = clean.replace(/\s+/g, ' ').trim();
   
-  const acronyms = ['tti', 'ite', 'gss', 'lsn', 'vhse', 'ghss', 'ss', 'ideal', 'gghss'];
+  // 5. Hardcode specific complex aliases
+  if (clean.includes('kumarapuram') && clean.includes('tti')) {
+    clean = 'government tti palakkad';
+  }
+  
+  // 6. Enforce official capitalization
+  const acronyms = ['tti', 'ite', 'gss', 'lsn', 'vhse', 'ghss', 'ss', 'ideal', 'gghss', 'vhss'];
   return clean.split(' ').map(word => {
     if (acronyms.includes(word)) return word.toUpperCase();
     return word.charAt(0).toUpperCase() + word.slice(1);
