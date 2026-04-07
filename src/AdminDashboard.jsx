@@ -11,6 +11,22 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Premium palette matching the "official" vibe
 const COLORS = ['#1a365d', '#2b6cb0', '#3182ce', '#4299e1', '#63b3ed', '#90cdf4', '#cbd5e0', '#e2e8f0'];
 
+const normalizeCollegeName = (name) => {
+  if (!name) return 'Unknown';
+  let clean = String(name).toLowerCase();
+  
+  clean = clean.replace(/\(w\)/g, ' ');
+  clean = clean.replace(/\bgovt\.?\b/g, 'government');
+  clean = clean.replace(/[^a-z0-9]/g, ' ');
+  clean = clean.replace(/\s+/g, ' ').trim();
+  
+  const acronyms = ['tti', 'ite', 'gss', 'lsn', 'vhse', 'ghss', 'ss', 'ideal', 'gghss'];
+  return clean.split(' ').map(word => {
+    if (acronyms.includes(word)) return word.toUpperCase();
+    return word.charAt(0).toUpperCase() + word.slice(1);
+  }).join(' ');
+};
+
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -49,8 +65,7 @@ export default function AdminDashboard() {
   const institutionsMap = useMemo(() => {
     const map = {};
     submissions.forEach(s => {
-      let col = s.college_name || 'Unknown';
-      col = col.trim();
+      const col = normalizeCollegeName(s.college_name);
       if (!map[col]) map[col] = { name: col, count: 0, totalScore: 0 };
       map[col].count += 1;
       map[col].totalScore += s.score;
@@ -263,6 +278,33 @@ export default function AdminDashboard() {
                      }))})}
                   </div>
                 </div>
+              </div>
+            </div>
+
+            <div className="table-card" style={{ marginTop: '32px' }}>
+              <div className="table-header">
+                <h2 className="card-title" style={{margin: 0}}>Institution Verification Breakdown</h2>
+                <span className="badge">{institutionsMap.length} Registered Institutions</span>
+              </div>
+              <div className="table-responsive">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Institution Name</th>
+                      <th>Total Verified Candidates</th>
+                      <th>Network Average Score</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {institutionsMap.map((inst, idx) => (
+                      <tr key={idx}>
+                        <td><strong className="primary-text">{inst.name}</strong></td>
+                        <td><span className="count-bubble">{inst.count}</span> candidates</td>
+                        <td><strong className="score-text">{inst.avgScore}</strong></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
