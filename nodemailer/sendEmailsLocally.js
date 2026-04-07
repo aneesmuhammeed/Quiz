@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import path from 'path';
+import puppeteer from 'puppeteer';
 
 // Load variables from the parent .env file
 dotenv.config({ path: path.join(process.cwd(), '..', '.env') });
@@ -21,8 +22,8 @@ const supabaseUrl = process.env.VITE_SUPABASE_URL;
 const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// Apps script URL (should be updated with the newest deployed code that supports action='get_pdf')
-const appsScriptUrl = process.env.VITE_APPS_SCRIPT_URL;
+// Local Certificate Background
+const bgImagePath = path.join(process.cwd(), 'certificate_bg.png'); // Ensure you have this file in your nodemailer folder
 
 // ======================================
 // NODEMAILER SETUP
@@ -109,26 +110,74 @@ async function run() {
         responses: responsesList,
       };
 
-      console.log(`Fetching PDF from Apps Script for ${email}...`);
-      const response = await fetch(appsScriptUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      // GENERATE PDF LOCALLY WITH PUPPETEER
+      console.log(`Generating PDF locally for ${email}...`);
+      const browser = await puppeteer.launch({ headless: "new" });
+      const page = await browser.newPage();
 
-      const responseText = await response.text();
-      let pdfBase64 = null;
-      try {
-        const json = JSON.parse(responseText);
-        pdfBase64 = json.pdfBase64;
-        if (!pdfBase64) {
-          console.error("   └─ Error from Apps Script:", json.error || responseText);
-          continue; // Try the next one
-        }
-      } catch (e) {
-        console.error("   └─ Failed to parse Apps Script response:", responseText);
-        continue;
-      }
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <style>
+            @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Montserrat:wght@400;600&display=swap');
+            body { 
+              margin: 0; 
+              padding: 0; 
+              width: 1123px; /* A4 Landscape at 96 DPI */
+              height: 794px; 
+              overflow: hidden;
+              position: relative;
+              font-family: 'Montserrat', sans-serif;
+            }
+            .background {
+              position: absolute;
+              top: 0; left: 0; width: 100%; height: 100%;
+              z-index: -1;
+            }
+            .content {
+              width: 100%;
+              height: 100%;
+              display: flex;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              text-align: center;
+              color: #1e1b4b; /* Dark Navy Color to match your design */
+            }
+            .name {
+              font-family: 'Playfair Display', serif;
+              font-size: 52px;
+              font-weight: 700;
+              margin-top: 100px; /* Adjust as needed */
+              color: #000000;
+              text-transform: uppercase;
+            }
+            .details {
+              font-size: 20px;
+              color: #1e1b4b;
+              margin-top: 20px;
+              font-weight: 600;
+            }
+          </style>
+        </head>
+        <body>
+          <img src="data:image/png;base64,${fs.readFileSync(bgImagePath).toString('base64')}" class="background" />
+          <div class="content">
+            <div class="name">${name}</div>
+            <div class="details">${sub.course} ${sub.batch} Batch, ${sub.college_name}</div>
+          </div>
+        </body>
+        </html>
+      `;
+
+      await page.setContent(htmlContent);
+      const pdfBase64 = await page.pdf({
+        format: 'A4',
+        landscape: true,
+        printBackground: true,
+      });
+      await browser.close();
 
       // BUILD HTML RESPONSE SHEET
       const responseHTML = responsesList.map((item, j) => {
@@ -356,7 +405,7 @@ async function run() {
         attachments: [
           {
             filename: `Certificate - ${name}.pdf`,
-            content: Buffer.from(pdfBase64, 'base64'),
+            content: pdfBase64,
             contentType: 'application/pdf'
           }
         ]
