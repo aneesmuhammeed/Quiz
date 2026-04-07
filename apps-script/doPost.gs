@@ -6,6 +6,7 @@ function doPost(e) {
     const data = JSON.parse(e.postData.contents);
 
     const {
+      action,        // <--- NEW: Flag to detect if we just want PDF
       fullName,
       email,
       course,
@@ -65,6 +66,13 @@ function doPost(e) {
 
     // 🎓 Generate Certificate PDF
     const pdf = generateCertificateForWeb(fullName, course, batch, collegeName);
+
+    // 🚦 HYBRID MODE: If Node.js asked for the PDF directly, hand it back and STOP here!
+    if (action === 'get_pdf') {
+      const base64 = Utilities.base64Encode(pdf.getBytes());
+      return ContentService.createTextOutput(JSON.stringify({ pdfBase64: base64, success: true }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
 
     // 📧 Send Result Email
     MailApp.sendEmail({
