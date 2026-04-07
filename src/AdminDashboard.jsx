@@ -5,55 +5,37 @@ import { Download, Users, CheckCircle, BarChart3, Lock, ShieldAlert, Award, Buil
 import './admin.css';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658'];
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Premium palette matching the "official" vibe
+const COLORS = ['#1a365d', '#2b6cb0', '#3182ce', '#4299e1', '#63b3ed', '#90cdf4', '#cbd5e0', '#e2e8f0'];
 
 export default function AdminDashboard() {
-  const [sessionKey, setSessionKey] = useState('');
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [submissions, setSubmissions] = useState([]);
   const [activeTab, setActiveTab] = useState('overview');
 
   useEffect(() => {
-    const savedKey = localStorage.getItem('supabase_service_key');
-    if (savedKey) {
-      setSessionKey(savedKey);
-      handleLogin(savedKey);
-    }
+    const fetchSubmissions = async () => {
+      setLoading(true);
+      try {
+        const { data, error: fetchError } = await supabase
+          .from('submissions')
+          .select('*')
+          .order('score', { ascending: false });
+
+        if (fetchError) throw fetchError;
+        setSubmissions(data || []);
+      } catch (err) {
+        setError("Error fetching data: " + err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchSubmissions();
   }, []);
-
-  const handleLogin = async (keyToUse = sessionKey) => {
-    if (!keyToUse) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const supabase = createClient(SUPABASE_URL, keyToUse);
-      const { data, error: fetchError } = await supabase
-        .from('submissions')
-        .select('*')
-        .order('score', { ascending: false });
-
-      if (fetchError) throw fetchError;
-      
-      setSubmissions(data || []);
-      setIsAuthenticated(true);
-      localStorage.setItem('supabase_service_key', keyToUse);
-    } catch (err) {
-      setError("Invalid Service Role Key or Network Error. " + err.message);
-      setIsAuthenticated(false);
-      localStorage.removeItem('supabase_service_key');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogout = () => {
-    localStorage.removeItem('supabase_service_key');
-    setIsAuthenticated(false);
-    setSessionKey('');
-    setSubmissions([]);
-  };
 
   const totalParticipants = submissions.length;
   const averageScore = useMemo(() => {
@@ -67,7 +49,8 @@ export default function AdminDashboard() {
   const institutionsMap = useMemo(() => {
     const map = {};
     submissions.forEach(s => {
-      const col = s.college_name || 'Unknown';
+      let col = s.college_name || 'Unknown';
+      col = col.trim();
       if (!map[col]) map[col] = { name: col, count: 0, totalScore: 0 };
       map[col].count += 1;
       map[col].totalScore += s.score;
@@ -77,6 +60,15 @@ export default function AdminDashboard() {
       avgScore: (m.totalScore / m.count).toFixed(2)
     })).sort((a,b) => b.count - a.count);
   }, [submissions]);
+
+  // Limit Pie Chart slices so it doesn't break Recharts when there are 100+ groups
+  const pieChartData = useMemo(() => {
+    if (institutionsMap.length <= 6) return institutionsMap;
+    const top = institutionsMap.slice(0, 6);
+    const others = institutionsMap.slice(6);
+    const otherCount = others.reduce((sum, curr) => sum + curr.count, 0);
+    return [...top, { name: 'Other Institutions', count: otherCount, avgScore: 0 }];
+  }, [institutionsMap]);
 
   const scoreDistribution = useMemo(() => {
     const bins = { '0-20':0, '21-40':0, '41-60':0, '61-80':0, '81-100':0, '100+':0 };
@@ -118,30 +110,34 @@ export default function AdminDashboard() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `exam_results_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute("download", `official_exam_registry_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  if (!isAuthenticated) {
+  const renderCustomLegend = (props) => {
+    const { payload } = props;
     return (
-      <div className="admin-login-wrapper">
-        <div className="admin-login-box">
-          <div className="icon-wrapper"><Lock size={48} color="#6366f1" /></div>
-          <h2>Admin Authentication</h2>
-          <p>This dashboard accesses protected leaderboard data. Please enter your Supabase <strong>Service Role Key</strong> to bypass Row Level Security.</p>
-          {error && <div className="error-alert"><ShieldAlert size={18} /> {error}</div>}
-          <input 
-            type="password" 
-            placeholder="eyJh..." 
-            value={sessionKey} 
-            onChange={(e) => setSessionKey(e.target.value)}
-          />
-          <button onClick={() => handleLogin()} disabled={loading}>
-            {loading ? 'Authenticating...' : 'Unlock Dashboard'}
-          </button>
-        </div>
+      <div className="custom-legend-container">
+        {payload.map((entry, index) => (
+          <div key={`item-${index}`} className="custom-legend-item">
+             <div className="legend-color-box" style={{ backgroundColor: entry.color }}></div>
+             <div className="legend-text-group">
+                <span className="legend-text" title={entry.value}>{entry.value}</span>
+                <span className="legend-count-bubble">{entry.payload.count}</span>
+             </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="admin-loading">
+        <div className="spinner"></div>
+        <p>Connecting to secure registry...</p>
       </div>
     );
   }
@@ -150,47 +146,66 @@ export default function AdminDashboard() {
     <div className="admin-dashboard-container">
       <header className="admin-header">
         <div className="logo-section">
-          <BarChart3 size={28} color="#4f46e5" />
-          <h1>Exam Analytics</h1>
+          <ShieldAlert size={32} className="text-gold" />
+          <div>
+            <h1>OFFICIAL EXAM REGISTRY</h1>
+            <p className="subtitle">Records & Analytics Administration</p>
+          </div>
         </div>
+        
         <nav className="admin-tabs">
-          <button className={activeTab === 'overview' ? 'active' : ''} onClick={() => setActiveTab('overview')}>Overview</button>
-          <button className={activeTab === 'leaderboard' ? 'active' : ''} onClick={() => setActiveTab('leaderboard')}>Leaderboard</button>
-          <button className={activeTab === 'institutions' ? 'active' : ''} onClick={() => setActiveTab('institutions')}>Institutions</button>
+          <button className={activeTab === 'overview' ? 'active' : ''} onClick={() => setActiveTab('overview')}>
+            <BarChart3 size={18} /> Overview
+          </button>
+          <button className={activeTab === 'leaderboard' ? 'active' : ''} onClick={() => setActiveTab('leaderboard')}>
+            <Award size={18} /> Global Leaderboard
+          </button>
+          <button className={activeTab === 'institutions' ? 'active' : ''} onClick={() => setActiveTab('institutions')}>
+            <Building2 size={18} /> Institutions
+          </button>
         </nav>
+        
         <div className="actions-section">
-          <button className="export-btn" onClick={exportToCSV}><Download size={16} /> Export CSV</button>
-          <button className="logout-btn" onClick={handleLogout}>Log Out</button>
+          <button className="export-btn" onClick={exportToCSV}>
+            <Download size={18} /> EXPORT CSV
+          </button>
         </div>
       </header>
 
       <main className="admin-main-content">
+        {error && (
+            <div className="error-alert">
+               <AlertTriangle size={20} /> <strong>Error:</strong> {error}
+            </div>
+        )}
+
         {activeTab === 'overview' && (
           <div className="tab-pane fade-in">
+            <h2 className="section-title">At a Glance</h2>
             <div className="metrics-grid">
               <div className="metric-card">
-                <div className="metric-icon"><Users color="#3b82f6" /></div>
+                <div className="metric-icon blue"><Users size={24} /></div>
                 <div>
                   <span className="metric-label">Total Participants</span>
                   <div className="metric-value">{totalParticipants}</div>
                 </div>
               </div>
               <div className="metric-card">
-                <div className="metric-icon"><Award color="#10b981" /></div>
+                <div className="metric-icon green"><CheckCircle size={24} /></div>
                 <div>
                   <span className="metric-label">Average Score</span>
                   <div className="metric-value">{averageScore}</div>
                 </div>
               </div>
               <div className="metric-card">
-                <div className="metric-icon"><Building2 color="#8b5cf6" /></div>
+                <div className="metric-icon indigo"><Building2 size={24} /></div>
                 <div>
                   <span className="metric-label">Institutions</span>
                   <div className="metric-value">{institutionsMap.length}</div>
                 </div>
               </div>
               <div className="metric-card alert">
-                <div className="metric-icon"><AlertTriangle color="#ef4444" /></div>
+                <div className="metric-icon red"><AlertTriangle size={24} /></div>
                 <div>
                   <span className="metric-label">Disqualified</span>
                   <div className="metric-value">{disqualifiedCount}</div>
@@ -200,42 +215,53 @@ export default function AdminDashboard() {
 
             <div className="charts-grid">
               <div className="chart-card">
-                <h3>Score Distribution</h3>
-                <div className="chart-wrapper" style={{ height: '300px' }}>
+                <h3 className="card-title">Score Distribution</h3>
+                <div className="chart-wrapper">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={scoreDistribution}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                      <XAxis dataKey="name" axisLine={false} tickLine={false} />
-                      <YAxis allowDecimals={false} axisLine={false} tickLine={false} />
-                      <Tooltip cursor={{fill: '#f3f4f6'}} contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                      <Bar dataKey="count" fill="#4f46e5" radius={[4, 4, 0, 0]} />
+                    <BarChart data={scoreDistribution} margin={{top: 20, right: 30, left: 0, bottom: 20}}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#4a5568', fontSize: 13}} dy={10} />
+                      <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{fill: '#4a5568', fontSize: 13}} dx={-10} />
+                      <Tooltip cursor={{fill: '#edf2f7'}} contentStyle={{borderRadius: '8px', border: '1px solid #cbd5e0', padding: '12px 16px', fontWeight: 600, color: '#1a365d', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
+                      <Bar dataKey="count" fill="#2b6cb0" radius={[4, 4, 0, 0]} barSize={40} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </div>
 
               <div className="chart-card">
-                <h3>Institution Participation</h3>
-                <div className="chart-wrapper" style={{ height: '300px' }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={institutionsMap.slice(0, 7)}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={100}
-                        paddingAngle={2}
-                        dataKey="count"
-                      >
-                        {institutionsMap.slice(0, 7).map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                      <Legend />
-                    </PieChart>
-                  </ResponsiveContainer>
+                <h3 className="card-title">Institution Participation</h3>
+                <div className="chart-wrapper pie-wrapper">
+                  <div className="pie-container">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                        <Pie
+                            data={pieChartData}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={70}
+                            outerRadius={105}
+                            paddingAngle={3}
+                            dataKey="count"
+                            stroke="none"
+                        >
+                            {pieChartData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                        </Pie>
+                        <Tooltip 
+                            contentStyle={{borderRadius: '8px', border: 'none', fontWeight: 600, color: '#1a365d', boxShadow: '0 4px 10px rgba(0,0,0,0.1)'}}
+                        />
+                        </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="legend-container">
+                     {renderCustomLegend({ payload: pieChartData.map((m, i) => ({
+                         value: m.name,
+                         color: COLORS[i % COLORS.length],
+                         payload: m
+                     }))})}
+                  </div>
                 </div>
               </div>
             </div>
@@ -246,40 +272,40 @@ export default function AdminDashboard() {
           <div className="tab-pane fade-in">
             <div className="table-card">
               <div className="table-header">
-                <h2>Global Leaderboard</h2>
-                <span className="badge">{totalParticipants} records</span>
+                <h2 className="card-title" style={{margin: 0}}>Official Global Leaderboard</h2>
+                <span className="badge">{totalParticipants} Registered Records</span>
               </div>
               <div className="table-responsive">
                 <table className="admin-table">
                   <thead>
                     <tr>
                       <th>Rank</th>
-                      <th>Candidate Name</th>
-                      <th>Institution</th>
-                      <th>Score</th>
+                      <th>Candidate Details</th>
+                      <th>Institution Code / Name</th>
+                      <th>Final Score</th>
                       <th>Accuracy (C / I)</th>
-                      <th>Status</th>
+                      <th>Status Check</th>
                     </tr>
                   </thead>
                   <tbody>
                     {submissions.map((sub, index) => (
                       <tr key={sub.id} className={sub.disqualified ? 'disqualified-row' : ''}>
-                        <td>#{index + 1}</td>
+                        <td className="rank-cell">#{index + 1}</td>
                         <td>
-                          <strong>{sub.full_name || sub.student_name}</strong>
+                          <strong className="primary-text">{sub.full_name || sub.student_name}</strong>
                           <span className="sub-text">{sub.mail_id || sub.email}</span>
                         </td>
                         <td>
-                          {sub.college_name || 'N/A'}
+                          <span className="primary-text" title={sub.college_name}>{sub.college_name || 'N/A'}</span>
                           <span className="sub-text">{sub.course} · {sub.batch}</span>
                         </td>
                         <td><strong className="score-text">{sub.score}</strong></td>
                         <td><span className="correct-text">{sub.total_correct}</span> / <span className="wrong-text">{sub.total_incorrect}</span></td>
                         <td>
                           {sub.disqualified ? (
-                            <span className="status-badge error">Disqualified</span>
+                            <span className="status-badge error">DISQUALIFIED</span>
                           ) : (
-                            <span className="status-badge success">Approved</span>
+                            <span className="status-badge success">VERIFIED</span>
                           )}
                         </td>
                       </tr>
@@ -295,23 +321,23 @@ export default function AdminDashboard() {
           <div className="tab-pane fade-in">
             <div className="table-card">
               <div className="table-header">
-                <h2>Institution Breakdown</h2>
-                <span className="badge">{institutionsMap.length} institutions</span>
+                <h2 className="card-title" style={{margin: 0}}>Institution Verification Breakdown</h2>
+                <span className="badge">{institutionsMap.length} Registered Institutions</span>
               </div>
               <div className="table-responsive">
                 <table className="admin-table">
                   <thead>
                     <tr>
                       <th>Institution Name</th>
-                      <th>Total Candidates</th>
-                      <th>Average Score</th>
+                      <th>Total Verified Candidates</th>
+                      <th>Network Average Score</th>
                     </tr>
                   </thead>
                   <tbody>
                     {institutionsMap.map((inst, idx) => (
                       <tr key={idx}>
-                        <td><strong>{inst.name}</strong></td>
-                        <td>{inst.count} candidates</td>
+                        <td><strong className="primary-text">{inst.name}</strong></td>
+                        <td><span className="count-bubble">{inst.count}</span> candidates</td>
                         <td><strong className="score-text">{inst.avgScore}</strong></td>
                       </tr>
                     ))}
