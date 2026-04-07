@@ -1035,13 +1035,22 @@ function App() {
           {submitError && <div className="error-msg">⚠ {submitError}</div>}
 
           <div className="thankyou-box">
-            <div className="thankyou-box-title">📧 Check your email!</div>
-            <p>
-              A detailed result summary has been sent to{' '}
-              <strong>{mailId}</strong>. Please check your inbox and spam folder for
-              your score report and certificate information.
-            </p>
-            <p>🙏 <strong>Thank you for attending the exam!</strong> We appreciate your participation and wish you all the best.</p>
+           <div className="thankyou-box-title">📧 Check your email!</div>
+
+<p>
+  A detailed result summary has been sent to <strong>{mailId}</strong>. 
+  Please check your inbox and spam folder for your score report.
+</p>
+
+<p>
+  🎓 Your certificate will be sent to your email <strong>on or before today 7:00 PM</strong>. 
+  Kindly check your inbox (and spam/junk folder if necessary).
+</p>
+
+<p>
+  🙏 <strong>Thank you for attending the exam!</strong> 
+  We appreciate your participation and wish you all the best.
+</p>
           </div>
         </div>
       </div>
