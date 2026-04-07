@@ -42,7 +42,7 @@ const transporter = nodemailer.createTransport({
 // ======================================
 // SKIPPING LOGIC
 // ======================================
-const START_FROM_ID = "b0efadc6-582c-47ea-b075-060e282463c3";
+const START_FROM_ID = "8f555110-fa98-4be9-a562-1c5021eadea8 ";
 let skipping = true;
 
 
