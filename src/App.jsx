@@ -445,6 +445,18 @@ function App() {
         const appsScriptUrl = import.meta.env.VITE_APPS_SCRIPT_URL;
         if (appsScriptUrl && !error) {
           try {
+            const responsesList = QUESTIONS.map((q) => {
+              const responseIdx = answerPayload[q.id];
+              const isUnattempted = responseIdx === null || responseIdx === undefined;
+              return {
+                question: q.prompt,
+                userAnswer: isUnattempted ? null : q.options[responseIdx],
+                correctAnswer: q.options[q.correctIndex],
+                isCorrect: !isUnattempted && responseIdx === q.correctIndex,
+                unattempted: isUnattempted,
+              };
+            });
+
             await fetch(appsScriptUrl, {
               method: 'POST',
               body: JSON.stringify({
@@ -458,6 +470,7 @@ function App() {
                 totalIncorrect,
                 unattempted,
                 disqualified: finalDisqualified,
+                responses: responsesList,
               }),
               // Note: No JSON Content-Type header — Apps Script requires this
             });
